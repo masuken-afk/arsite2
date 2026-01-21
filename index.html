@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>AR起動</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+
+<p>ARを起動しています…</p>
+
+<script>
+const ua = navigator.userAgent;
+
+// iPhone / iPad
+if (/iPhone|iPad|iPod/.test(ua)) {
+  location.href = "quicklook.html";
+}
+// Android
+else if (/Android/.test(ua)) {
+  location.href = "webxr.html";
+}
+// その他
+else {
+  document.body.innerHTML = "スマートフォンでアクセスしてください";
+}
+</script>
+
+</body>
+</html>

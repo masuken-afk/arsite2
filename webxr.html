@@ -2,10 +2,10 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>WebXR AR Minimal</title>
+  <title>WebXR AR Debug</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { margin: 0; overflow: hidden; }
+    body { margin: 0; overflow: hidden; font-family: sans-serif; }
     #enterAR {
       position: absolute;
       bottom: 20px;
@@ -13,6 +13,7 @@
       transform: translateX(-50%);
       padding: 12px 20px;
       font-size: 16px;
+      display: none;
     }
     #status {
       position: absolute;
@@ -21,14 +22,30 @@
       transform: translateX(-50%);
       color: white;
       background: rgba(0,0,0,0.7);
+      padding: 10px 20px;
+      border-radius: 5px;
+      text-align: center;
+      max-width: 80%;
+    }
+    #debugLog {
+      position: absolute;
+      top: 80px;
+      left: 10px;
+      right: 10px;
+      color: white;
+      background: rgba(0,0,0,0.5);
       padding: 10px;
       border-radius: 5px;
+      font-size: 12px;
+      max-height: 200px;
+      overflow-y: auto;
     }
   </style>
 </head>
 <body>
-<div id="status">モデル読み込み中...</div>
-<button id="enterAR" style="display:none;">ARを起動</button>
+<div id="status">初期化中...</div>
+<div id="debugLog"></div>
+<button id="enterAR">ARを起動</button>
 
 <script type="module">
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
@@ -40,89 +57,203 @@ let reticle;
 let hitTestSource = null;
 let hitTestSourceRequested = false;
 let model;
+let isModelLoaded = false;
+
+// デバッグログ関数
+function log(message) {
+  console.log(message);
+  const debugLog = document.getElementById("debugLog");
+  debugLog.innerHTML += message + "<br>";
+  debugLog.scrollTop = debugLog.scrollHeight;
+}
+
+function updateStatus(message) {
+  document.getElementById("status").textContent = message;
+  log("Status: " + message);
+}
 
 init();
 
-function init() {
-  scene = new THREE.Scene();
-
-  camera = new THREE.PerspectiveCamera();
-
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.xr.enabled = true;
-  document.body.appendChild(renderer.domElement);
-
-  const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
-  scene.add(light);
-
-  // レティクル(平面表示)
-  const geometry = new THREE.RingGeometry(0.08, 0.1, 32).rotateX(-Math.PI / 2);
-  const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-  reticle = new THREE.Mesh(geometry, material);
-  reticle.matrixAutoUpdate = false;
-  reticle.visible = false;
-  scene.add(reticle);
-
-  // 3Dモデル読み込み
-  const loader = new GLTFLoader();
-  loader.load(
-    "model/mascot.glb",  // パス修正
-    gltf => {
-      model = gltf.scene;
-      model.scale.set(0.3, 0.3, 0.3);
-      document.getElementById("status").textContent = "モデル読み込み完了";
-      
-      // WebXR対応チェック
-      if (navigator.xr) {
-        navigator.xr.isSessionSupported('immersive-ar').then(supported => {
-          if (supported) {
-            document.getElementById("enterAR").style.display = "block";
-            document.getElementById("status").style.display = "none";
-          } else {
-            document.getElementById("status").textContent = "このデバイスはARに対応していません";
-          }
-        });
-      } else {
-        document.getElementById("status").textContent = "WebXRに対応していません";
-      }
-    },
-    undefined,
-    error => {
-      console.error("モデル読み込みエラー:", error);
-      document.getElementById("status").textContent = "モデルの読み込みに失敗しました";
-    }
-  );
-
-  document.getElementById("enterAR").addEventListener("click", startAR);
+async function init() {
+  try {
+    log("初期化開始");
+    
+    // Three.jsシーン設定
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera();
+    
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+    
+    log("レンダラー初期化完了");
+    
+    const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+    scene.add(light);
+    
+    // レティクル作成
+    const geometry = new THREE.RingGeometry(0.08, 0.1, 32).rotateX(-Math.PI / 2);
+    const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+    reticle = new THREE.Mesh(geometry, material);
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+    
+    log("シーン設定完了");
+    
+    // WebXR対応チェック（モデル読み込み前に実行）
+    await checkWebXRSupport();
+    
+    // 3Dモデル読み込み
+    loadModel();
+    
+  } catch (error) {
+    log("初期化エラー: " + error.message);
+    updateStatus("初期化エラーが発生しました");
+  }
 }
 
-function startAR() {
+async function checkWebXRSupport() {
+  log("WebXR対応チェック開始");
+  
   if (!navigator.xr) {
-    alert("WebXRに対応していません");
+    updateStatus("WebXRに対応していません");
+    log("navigator.xr が存在しません");
     return;
   }
+  
+  log("navigator.xr 検出");
+  
+  try {
+    const supported = await navigator.xr.isSessionSupported('immersive-ar');
+    log("AR対応状況: " + supported);
+    
+    if (supported) {
+      updateStatus("ARに対応しています。モデル読み込み中...");
+    } else {
+      updateStatus("このデバイスはARに対応していません");
+    }
+  } catch (error) {
+    log("AR対応チェックエラー: " + error.message);
+    updateStatus("AR対応チェックに失敗しました");
+  }
+}
 
-  navigator.xr.requestSession("immersive-ar", {
-    requiredFeatures: ["hit-test"]
-  }).then(session => {
+function loadModel() {
+  log("モデル読み込み開始");
+  updateStatus("3Dモデル読み込み中...");
+  
+  const loader = new GLTFLoader();
+  
+  // 複数のパスを試行
+  const modelPaths = [
+    "model/mascot.glb",
+    "./model/mascot.glb",
+    "mascot.glb",
+    "./mascot.glb"
+  ];
+  
+  let currentPathIndex = 0;
+  
+  function tryLoadModel() {
+    if (currentPathIndex >= modelPaths.length) {
+      // すべてのパスで失敗した場合、デフォルトモデルを作成
+      log("すべてのパスでモデル読み込み失敗。デフォルトモデルを使用");
+      createDefaultModel();
+      return;
+    }
+    
+    const path = modelPaths[currentPathIndex];
+    log("パス試行: " + path);
+    
+    loader.load(
+      path,
+      gltf => {
+        log("モデル読み込み成功: " + path);
+        model = gltf.scene;
+        model.scale.set(0.3, 0.3, 0.3);
+        isModelLoaded = true;
+        updateStatus("準備完了！ARボタンを押してください");
+        document.getElementById("enterAR").style.display = "block";
+      },
+      xhr => {
+        const percent = Math.round((xhr.loaded / xhr.total) * 100);
+        log("読み込み中: " + percent + "%");
+      },
+      error => {
+        log("読み込み失敗 (" + path + "): " + error.message);
+        currentPathIndex++;
+        tryLoadModel();
+      }
+    );
+  }
+  
+  tryLoadModel();
+}
+
+function createDefaultModel() {
+  // モデルが読み込めない場合のデフォルト立方体
+  const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+  const material = new THREE.MeshStandardMaterial({ color: 0xff6b6b });
+  model = new THREE.Mesh(geometry, material);
+  isModelLoaded = true;
+  
+  updateStatus("デフォルトモデルで準備完了");
+  document.getElementById("enterAR").style.display = "block";
+  log("デフォルト立方体を作成");
+}
+
+document.getElementById("enterAR").addEventListener("click", startAR);
+
+async function startAR() {
+  log("AR起動試行");
+  
+  if (!navigator.xr) {
+    alert("WebXRに対応していません");
+    log("WebXR非対応");
+    return;
+  }
+  
+  if (!isModelLoaded) {
+    alert("モデルの読み込みが完了していません");
+    log("モデル未読み込み");
+    return;
+  }
+  
+  try {
+    updateStatus("ARセッション開始中...");
+    
+    const session = await navigator.xr.requestSession("immersive-ar", {
+      requiredFeatures: ["hit-test"]
+    });
+    
+    log("ARセッション取得成功");
+    
     renderer.xr.setSession(session);
     document.getElementById("enterAR").style.display = "none";
-
+    document.getElementById("status").style.display = "none";
+    document.getElementById("debugLog").style.display = "none";
+    
     controller = renderer.xr.getController(0);
     controller.addEventListener("select", onSelect);
     scene.add(controller);
-
+    
+    log("コントローラー設定完了");
+    
     renderer.setAnimationLoop(render);
-  }).catch(error => {
-    console.error("ARセッション開始エラー:", error);
-    alert("ARを起動できませんでした");
+    
+  } catch (error) {
+    log("ARセッションエラー: " + error.message);
+    updateStatus("ARを起動できませんでした");
+    alert("ARエラー: " + error.message);
     document.getElementById("enterAR").style.display = "block";
-  });
+  }
 }
 
 function onSelect() {
   if (reticle.visible && model) {
+    log("オブジェクト配置");
     const placedModel = model.clone();
     placedModel.position.setFromMatrixPosition(reticle.matrix);
     scene.add(placedModel);
@@ -133,16 +264,17 @@ function render(timestamp, frame) {
   if (frame) {
     const referenceSpace = renderer.xr.getReferenceSpace();
     const session = renderer.xr.getSession();
-
+    
     if (!hitTestSourceRequested) {
       session.requestReferenceSpace("viewer").then(space => {
         session.requestHitTestSource({ space }).then(source => {
           hitTestSource = source;
+          log("HitTest初期化完了");
         });
       });
       hitTestSourceRequested = true;
     }
-
+    
     if (hitTestSource) {
       const hitTestResults = frame.getHitTestResults(hitTestSource);
       if (hitTestResults.length) {
@@ -155,9 +287,14 @@ function render(timestamp, frame) {
       }
     }
   }
-
+  
   renderer.render(scene, camera);
 }
+
+// ウィンドウリサイズ対応
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
 </script>
 </body>
 </html>
